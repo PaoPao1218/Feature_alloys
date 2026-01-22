@@ -1,0 +1,475 @@
+import os
+import numpy as np
+import pandas as pd
+from scipy.stats.mstats import gmean
+from scipy.spatial import KDTree
+from ase import neighborlist
+from ase.io import read
+import time
+import traceback
+import warnings
+import gc
+from scipy.spatial import Voronoi, ConvexHull
+import psutil
+
+t0 = time.time()
+warnings.filterwarnings("ignore", category=Warning)
+
+def get_memory_usage():
+    process = psutil.Process(os.getpid())
+    return process.memory_info().rss / 1024**2
+
+def load_feature_data():
+    possible_paths = [r'./element futures.xlsx']
+    
+    for path in possible_paths:
+        try:
+            if os.path.exists(path):
+                Feature = pd.read_excel(path)
+                Feature.set_index(["AtomicNumber"], inplace=True)
+                
+                affinity_cols = [col for col in Feature.columns if 'electron' in col.lower() and 'affinity' in col.lower()]
+                if not affinity_cols:
+                    print("Warning: No electron affinity columns found, filling with NaN")
+                    Feature['electron_affinity_ev'] = np.nan
+                else:
+                    if 'electron_affinity_ev' not in Feature.columns:
+                        Feature.rename(columns={affinity_cols[0]: 'electron_affinity_ev'}, inplace=True)
+                        print(f"Renamed '{affinity_cols[0]}' to 'electron_affinity_ev'")
+                
+                if 'covalent_radius' not in Feature.columns:
+                    radius_cols = [col for col in Feature.columns if 'covalent' in col.lower() and 'radius' in col.lower()]
+                    if radius_cols:
+                        Feature.rename(columns={radius_cols[0]: 'covalent_radius'}, inplace=True)
+                        print(f"Renamed '{radius_cols[0]}' to 'covalent_radius'")
+                    else:
+                        print("Warning: No covalent radius columns found, filling with NaN")
+                        Feature['covalent_radius'] = np.nan
+                
+                if 'atomization_enthalpy' not in Feature.columns:
+                    enthalpy_cols = [col for col in Feature.columns if 'atomization' in col.lower() and 'enthalpy' in col.lower()]
+                    if enthalpy_cols:
+                        Feature.rename(columns={enthalpy_cols[0]: 'atomization_enthalpy'}, inplace=True)
+                        print(f"Renamed '{enthalpy_cols[0]}' to 'atomization_enthalpy'")
+                    else:
+                        print("Warning: No atomization enthalpy columns found, filling with NaN")
+                        Feature['atomization_enthalpy'] = np.nan
+                
+                required_cols = ['valence_electron_count', 'electronegativity', 'cohesive_energy',
+                                 'd_electron_count', 'p_electron_count', 's_electron_count',
+                                 'first_ionization_energy', 'period_number']
+                for col in required_cols:
+                    if col not in Feature.columns:
+                        Feature[col] = np.nan
+                
+                print(f"Element feature data loaded successfully from: {path}")
+                return Feature
+        except Exception as e:
+            print(f"Failed to load feature data from {path}: {str(e)}")
+    
+    print("Warning: Unable to load feature data, using default empty table")
+    default_feature = pd.DataFrame(
+        index=range(1, 100),
+        columns=['electron_affinity_ev', 'covalent_radius', 'atomization_enthalpy',
+                 'valence_electron_count', 'electronegativity', 'cohesive_energy',
+                 'd_electron_count', 'p_electron_count', 's_electron_count',
+                 'first_ionization_energy', 'period_number']
+    ).fillna(np.nan)
+    default_feature.index.name = 'AtomicNumber'
+    return default_feature
+
+def get_atom_type_stats(atom_indices, structure):
+    valid_indices = [i for i in atom_indices if 0 <= i < len(structure)]
+    if not valid_indices:
+        return {'main_atom_num': np.nan}
+    
+    atomic_numbers = structure.get_atomic_numbers()
+    center_atom_nums = [atomic_numbers[i] for i in valid_indices]
+    unique_nums, counts = np.unique(center_atom_nums, return_counts=True)
+    max_count_idx = np.argmax(counts)
+    return {'main_atom_num': unique_nums[max_count_idx]}
+
+def safe_gmean(values):
+    try:
+        arr = np.array(values, dtype=float)
+        arr = arr[np.isfinite(arr)]
+        return gmean(arr) if len(arr) > 0 else np.nan
+    except:
+        return np.nan
+
+def validate_indices(indices, max_index):
+    return [i for i in indices if i < max_index]
+
+def calculate_surface_roughness(surface):
+    positions = surface.get_positions()
+    return np.std(positions[:, 2]) if len(positions) > 0 else 0.0
+
+def calculate_local_density(structure, indices, cutoff=5.0):
+    if not indices:
+        return 0.0
+    densities = []
+    for center in indices:
+        count = sum(1 for i in range(len(structure)) if i != center and structure.get_distance(center, i, mic=True) < cutoff)
+        densities.append(count / ((4/3)*np.pi*cutoff**3))
+    return np.mean(densities) if densities else 0.0
+
+def calculate_mixing_entropy(indices, structure):
+    max_idx = len(structure) - 1
+    valid_indices = [i for i in indices if 0 <= i <= max_idx]
+    if not valid_indices:
+        print("Mixing entropy calculation failed: No valid atom indices")
+        return np.nan
+    
+    nums = [structure.get_atomic_numbers()[i] for i in valid_indices]
+    unique, counts = np.unique(nums, return_counts=True)
+    props = counts / len(nums)
+    entropy = -np.sum(props * np.log(props))
+    return entropy
+
+def calculate_size_mismatch(indices, structure, feature_data=None):
+    if feature_data is None:
+        feature_data = load_feature_data()
+    
+    max_idx = len(structure) - 1
+    valid_indices = [i for i in indices if 0 <= i <= max_idx]
+    if not valid_indices:
+        print("Size mismatch calculation failed: No valid atom indices")
+        return np.nan
+    
+    atomic_numbers = structure.get_atomic_numbers()
+    nums = [atomic_numbers[i] for i in valid_indices]
+    valid_nums = [n for n in nums if n in feature_data.index and pd.notna(feature_data.loc[n, 'covalent_radius'])]
+    
+    if len(valid_nums) < 2:
+        print(f"Size mismatch calculation failed: Insufficient valid radii (need at least 2, got: {len(valid_nums)})")
+        return np.nan
+    
+    radii = [feature_data.loc[an, 'covalent_radius'] for an in valid_nums]
+    mean_r = np.mean(radii)
+    if mean_r == 0:
+        return np.nan
+    
+    return np.std(radii) / mean_r
+
+def calculate_lattice_strain(cell):
+    a, b, c = [np.linalg.norm(axis) for axis in cell]
+    angles = [np.degrees(np.arccos(np.dot(cell[i], cell[j])/(np.linalg.norm(cell[i])*np.linalg.norm(cell[j])))) 
+             for i, j in [(1,2), (0,2), (0,1)]]
+    return {'aspect_ratio': c/((a+b)/2), 'angle_deviation': np.mean([abs(ang-90) for ang in angles])}
+
+def calculate_voronoi_volume(structure):
+    try:
+        vor = Voronoi(structure.get_positions())
+        vols = []
+        for i in range(len(structure)):
+            reg = vor.regions[vor.point_region[i]]
+            if -1 in reg:
+                vols.append(0)
+                continue
+            vols.append(ConvexHull(vor.vertices[reg]).volume)
+        return np.mean(vols)
+    except:
+        return 0.0
+
+def find_surface_atoms(structure, z_threshold_ratio=0.75):
+    positions = structure.get_positions()
+    z_coords = positions[:, 2]
+    z_min, z_max = np.min(z_coords), np.max(z_coords)
+    z_threshold = z_min + (z_max - z_min) * z_threshold_ratio
+    surface_atoms = [i for i, z in enumerate(z_coords) if z >= z_threshold]
+    print(f"Surface atom filtering: z threshold={z_threshold:.2f}Å, found {len(surface_atoms)} outer atoms")
+    return surface_atoms
+
+def get_geometric_center_atoms(adsorption_atom, structure, surface_atoms, num_candidates=6):
+    if not surface_atoms:
+        return []
+        
+    ads_pos = structure.get_positions()[adsorption_atom]
+    print(f"Adsorbed O atom coordinates: {np.round(ads_pos, 3)}")
+    
+    surface_positions = [structure.get_positions()[i] for i in surface_atoms]
+    distances = [np.linalg.norm(ads_pos - pos) for pos in surface_positions]
+    indexed_distances = sorted(zip(surface_atoms, distances), key=lambda x: x[1])
+    candidates = [idx for idx, _ in indexed_distances[:num_candidates]]
+    
+    print(f"Candidate atom info (top {min(3, len(candidates))}):")
+    for i, idx in enumerate(candidates[:3]):
+        pos = structure.get_positions()[idx]
+        dist = np.linalg.norm(ads_pos - pos)
+        print(f"  Candidate atom {idx}: coordinates={np.round(pos, 3)}, distance={dist:.3f}Å")
+    
+    if len(candidates) >= 2:
+        pos1 = structure.get_positions()[candidates[0]]
+        pos2 = structure.get_positions()[candidates[1]]
+        midpoint = (pos1 + pos2) / 2
+        deviation = np.linalg.norm(ads_pos - midpoint)
+        print(f"Bridge site check: midpoint={np.round(midpoint, 3)}, deviation={deviation:.3f}Å")
+        
+        if deviation < 0.7:
+            print(f"Identified as bridge adsorption (OH), center atoms: {candidates[:2]}")
+            return candidates[:2]
+    
+    if len(candidates) >= 3:
+        pos1 = structure.get_positions()[candidates[0]]
+        pos2 = structure.get_positions()[candidates[1]]
+        pos3 = structure.get_positions()[candidates[2]]
+        centroid = (pos1 + pos2 + pos3) / 3
+        deviation = np.linalg.norm(ads_pos - centroid)
+        print(f"Hollow site check: centroid={np.round(centroid, 3)}, deviation={deviation:.3f}Å")
+        
+        if deviation < 0.9:
+            print(f"Identified as hollow adsorption (OH), center atoms: {candidates[:3]}")
+            return candidates[:3]
+    
+    print(f"Identified as top adsorption (OH), center atom: {candidates[0]}")
+    return candidates[:1]
+
+def electronic_descriptor(indices, structure, feature_data=None):
+    if feature_data is None:
+        feature_data = load_feature_data()
+    
+    max_idx = len(structure) - 1
+    valid_indices = [i for i in indices if 0 <= i <= max_idx]
+    if not valid_indices:
+        print("Electronic descriptor calculation failed: No valid atom indices")
+        return [np.nan]*12
+    
+    atomic_numbers = structure.get_atomic_numbers()
+    nums = [atomic_numbers[i] for i in valid_indices]
+    valid_nums = [n for n in nums if n in feature_data.index]
+    if not valid_nums:
+        print(f"Electronic descriptor calculation failed: No valid atomic numbers (input: {nums})")
+        return [np.nan]*12
+    
+    required_cols = ['valence_electron_count', 'electronegativity', 'cohesive_energy',
+                     'd_electron_count', 'p_electron_count', 's_electron_count',
+                     'first_ionization_energy', 'covalent_radius', 'electron_affinity_ev',
+                     'period_number', 'atomization_enthalpy']
+    for col in required_cols:
+        if col not in feature_data.columns:
+            print(f"Warning: Missing {col} in feature table, filling with NaN")
+            feature_data[col] = np.nan
+    
+    data = feature_data.loc[valid_nums]
+    res = [safe_gmean(data[col]) for col in required_cols]
+    return (res[0], res[1], res[0]**2/res[1] if res[1] else np.nan, -res[2],
+            res[3], res[4], res[5], res[6], res[7], res[8], res[9], res[10])
+
+def process_files(file, filePath, memory_threshold=8):
+    Feature = load_feature_data()
+    result = pd.DataFrame()
+    
+    for item in range(len(file)):
+        current_file = file[item]
+        print(f"\nProcessing file {item+1}/{len(file)}: {current_file}")
+        print(f"Memory usage: {get_memory_usage():.2f} MB")
+        
+        if get_memory_usage() > memory_threshold*1024:
+            print(f"Memory limit exceeded, skipping file")
+            continue
+            
+        if item % 5 == 0 and item > 0:
+            gc.collect()
+            
+        try:
+            full_path = os.path.join(filePath, current_file)
+            structure = read(full_path)
+            structure.set_pbc([True, True, True])
+            atomic_numbers = structure.get_atomic_numbers()
+            num_atoms = len(structure)
+            print(f"Structure file loaded successfully, total atoms: {num_atoms}")
+            
+            ads = [i for i, anum in enumerate(atomic_numbers) if anum == 8]
+            if not ads:
+                ads = [i for i, anum in enumerate(atomic_numbers) if anum == 1]
+                if ads:
+                    print(f"Warning: No O atoms found, using H atom {ads[0]} as adsorption atom")
+                else:
+                    positions = structure.get_positions()
+                    ads = [np.argmax(positions[:, 2])]
+                    print(f"Warning: No OH atoms found, using highest Z-coordinate atom {ads[0]} as adsorption atom")
+            if len(ads) > 1:
+                positions = structure.get_positions()
+                ads_z = [positions[i][2] for i in ads]
+                ads = [ads[np.argmin(ads_z)]]
+                print(f"Multiple O atoms found, selecting surface closest O atom: {ads[0]}")
+            
+            surface = structure.copy()
+            atoms_to_remove = [i for i, anum in enumerate(surface.get_atomic_numbers()) if anum in [1, 8]]
+            for i in sorted(atoms_to_remove, reverse=True):
+                if i < len(surface):
+                    surface.pop(i)
+            if len(surface) == 0:
+                print("Error: Empty surface structure (all atoms are O or H)")
+                continue
+            
+            surface_atoms = find_surface_atoms(surface)
+            if not surface_atoms:
+                surface_atoms = list(range(len(surface)))
+                print("Using all surface atoms as candidates")
+            
+            original_indices = []
+            surface_numbers = surface.get_atomic_numbers()
+            for surf_idx in surface_atoms:
+                for orig_idx in range(num_atoms):
+                    if orig_idx not in atoms_to_remove and atomic_numbers[orig_idx] == surface_numbers[surf_idx]:
+                        if orig_idx not in original_indices:
+                            original_indices.append(orig_idx)
+                            break
+            if not original_indices:
+                original_indices = list(range(num_atoms))
+                print("Warning: Failed to map surface atoms to original structure, using all atoms")
+            
+            center_index = get_geometric_center_atoms(ads[0], structure, original_indices)
+            if not center_index:
+                print("Attempting KDTree search for center atoms...")
+                other_atoms = [i for i in range(num_atoms) if i not in ads]
+                if not other_atoms:
+                    print("No other atoms found, skipping")
+                    continue
+                positions = structure.get_positions()
+                ads_pos = positions[ads[0]]
+                other_positions = [positions[i] for i in other_atoms]
+                tree = KDTree(other_positions)
+                avg_bond_length = np.mean([np.linalg.norm(positions[i] - positions[j]) 
+                                         for i in range(min(5, num_atoms)) 
+                                         for j in range(i+1, min(5, num_atoms))]) if num_atoms >=2 else 1.8
+                search_radius = max(avg_bond_length * 1.5, 3.0)
+                kd_indices = tree.query_ball_point(ads_pos, r=search_radius)
+                if kd_indices:
+                    center_index = [other_atoms[i] for i in kd_indices]
+                    print(f"KDTree found {len(center_index)} center atoms (radius: {search_radius:.2f}Å)")
+            if not center_index:
+                print("No center atoms found, skipping")
+                continue
+            print(f"Final center atom indices: {center_index}")
+            
+            center_stats = get_atom_type_stats(center_index, structure)
+            
+            surface_center_indices = []
+            surface_numbers = surface.get_atomic_numbers()
+            for orig_idx in center_index:
+                for surf_idx in range(len(surface)):
+                    if surface_numbers[surf_idx] == atomic_numbers[orig_idx]:
+                        surface_center_indices.append(surf_idx)
+                        break
+            if not surface_center_indices:
+                surface_center_indices = list(range(min(3, len(surface))))
+                print("Using default surface center atom indices")
+            
+            nl = neighborlist.NeighborList([4.0]*len(surface), skin=0.3, self_interaction=False, bothways=True)
+            nl.update(surface)
+            nearest_neighbor = set()
+            for idx in surface_center_indices:
+                if idx < len(surface):
+                    neighbors = nl.get_neighbors(idx)[0].tolist()
+                    nearest_neighbor.update(neighbors)
+            nearest_neighbor = [x for x in nearest_neighbor if x not in surface_center_indices]
+            if not nearest_neighbor:
+                print("Expanding radius to search for neighbor atoms...")
+                nl = neighborlist.NeighborList([5.0]*len(surface), skin=0.3, self_interaction=False, bothways=True)
+                nl.update(surface)
+                for idx in surface_center_indices:
+                    if idx < len(surface):
+                        neighbors = nl.get_neighbors(idx)[0].tolist()
+                        nearest_neighbor.update(neighbors)
+                nearest_neighbor = [x for x in nearest_neighbor if x not in surface_center_indices]
+            if not nearest_neighbor:
+                print("No neighbor atoms found, skipping")
+                continue
+            print(f"Neighbor atom indices: {nearest_neighbor}")
+            
+            e0 = electronic_descriptor(center_index, structure, Feature)
+            e1 = electronic_descriptor(nearest_neighbor, structure, Feature)
+            local_structure = list(set(nearest_neighbor + center_index))
+            e = electronic_descriptor(local_structure, structure, Feature)
+            
+            (valence_electron_count_0, electronegativity_0, psi0, cohesive_energy_0, 
+             d_electron_count_0, p_electron_count_0, s_electron_count_0, first_ionization_energy_0, 
+             covalent_radius_0, electron_affinity_0, period_number_0, atomization_enthalpy_0) = e0
+            
+            (valence_electron_count_1, electronegativity_1, psi1, cohesive_energy_1, 
+             d_electron_count_1, p_electron_count_1, s_electron_count_1, first_ionization_energy_1, 
+             covalent_radius_1, electron_affinity_1, period_number_1, atomization_enthalpy_1) = e1
+            
+            (valence_electron_count, electronegativity, psi, cohesive_energy, 
+             d_electron_count, p_electron_count, s_electron_count, first_ionization_energy, 
+             covalent_radius, electron_affinity, period_number, atomization_enthalpy) = e
+            
+            CN_s = len(nearest_neighbor)
+            CN_m = [len(nl.get_neighbors(i)[0]) for i in range(len(surface))]
+            GCN_s = sum(CN_m[i] for i in nearest_neighbor) / max(CN_m) if CN_m and max(CN_m) > 0 else 0
+            valid_indices_all = validate_indices(range(len(structure)), len(surface))
+            distance_all = [structure.get_distance(ads[0], i, mic=True) for i in valid_indices_all]
+            distance_all.sort()
+            Bond = np.round(safe_gmean(distance_all[:len(center_index)]), 6) if distance_all else np.nan
+            roughness = calculate_surface_roughness(surface)
+            local_density_center = calculate_local_density(structure, center_index)
+            local_density_neighbor = calculate_local_density(structure, nearest_neighbor)
+            entropy_center = calculate_mixing_entropy(center_index, structure)
+            entropy_neighbor = calculate_mixing_entropy(nearest_neighbor, structure)
+            size_mismatch_center = calculate_size_mismatch(center_index, structure, Feature)
+            size_mismatch_neighbor = calculate_size_mismatch(nearest_neighbor, structure, Feature)
+            strain_features = calculate_lattice_strain(structure.get_cell())
+            voronoi_vol = calculate_voronoi_volume(structure)
+            
+            new_result = pd.DataFrame({
+                'Structure': [current_file],
+                'Z_0': [center_stats['main_atom_num']],
+                'ME_1': [entropy_neighbor],
+                'SM_1': [size_mismatch_neighbor],
+                'dE0': [d_electron_count_0], 'dE1': [d_electron_count_1], 'dE': [d_electron_count],
+                'pE0': [p_electron_count_0], 'pE1': [p_electron_count_1], 'pE': [p_electron_count],
+                'sE0': [s_electron_count_0], 'sE1': [s_electron_count_1], 'sE': [s_electron_count],
+                'ValE0': [valence_electron_count_0], 'ValE1': [valence_electron_count_1], 'ValE': [valence_electron_count],
+                'En0': [electronegativity_0], 'En1': [electronegativity_1], 'En': [electronegativity],
+                'IonE0': [first_ionization_energy_0], 'IonE1': [first_ionization_energy_1], 'IonE': [first_ionization_energy],
+                'Rad0': [covalent_radius_0], 'Rad1': [covalent_radius_1], 'Rad': [covalent_radius],
+                'CN': [GCN_s], 'BondL': [Bond], 'Surf_R': [roughness],
+                'LD_0': [local_density_center], 'LD_1': [local_density_neighbor],
+                'CellAR': [strain_features['aspect_ratio']], 'CellAD': [strain_features['angle_deviation']],
+                'V_Val': [voronoi_vol], 'AtomEn0': [atomization_enthalpy_0], 'AtomEn1': [atomization_enthalpy_1], 'AtomEn': [atomization_enthalpy]
+            })
+            
+            result = pd.concat([result, new_result], ignore_index=True)
+            print(f"File {current_file} processed successfully")
+            
+        except Exception as e:
+            print(f"Error processing file {current_file}: {str(e)}")
+            traceback.print_exc()
+            continue
+        finally:
+            try:
+                del structure, surface
+                gc.collect()
+            except:
+                pass
+                
+    return result
+
+if __name__ == "__main__":
+    file_path = r'./OH_dataset.vasp'
+    output_path = r'./OH_dataset.xlsx'
+    memory_threshold = 8
+    
+    if not os.path.exists(file_path):
+        print(f"Error: Path does not exist - {file_path}")
+        exit()
+    file = [f for f in os.listdir(file_path) if f.endswith(('.vasp', '.POSCAR'))]
+    if not file:
+        print(f"Error: No VASP files found in {file_path}")
+        exit()
+    print(f"Found {len(file)} VASP files (OH adsorption systems)")
+    
+    result = process_files(file=file, filePath=file_path, memory_threshold=memory_threshold)
+    
+    if result is not None and not result.empty:
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        result.to_excel(output_path, index=False)
+        print(f"\nResults saved to: {output_path}")
+        print("Feature preview (first 3 rows):")
+        print(result[['Structure', 'Z_0', 'ME_1', 'SM_1']].head(3))
+    else:
+        print("\nWarning: No result data generated")
+    
+    print(f'\nTotal processing time: {time.time() - t0:.3f} seconds')
