@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+*.log
+.venv/
+venv/
+env/
+H_dataset.xlsx
+OH_dataset.xlsx
+*_failed_files.csv
+failed_files.csv

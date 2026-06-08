@@ -1,4 +1,4 @@
-"""Compatibility wrapper for the historical extensionless H entry point."""
+"""Command-line entry point for H adsorption descriptors."""
 
 from feature_alloys import run
 

@@ -1,91 +1,219 @@
-Atomic Adsorption Descriptor Calculation Code
-=============================================
-This code is designed to calculate structural and electronic descriptors for H adsorption and OH adsorption systems based on VASP/POSCAR files. It automates the identification of adsorption sites, neighbor atoms, and computes key features for material property analysis.
+# Feature Alloys
 
-1. Core Functions
------------------
-1.1 Supported Adsorption Systems
-- OH Adsorption: Prioritizes O atoms as adsorption centers; falls back to H atoms or the atom with the highest Z-coordinate if O is not found.
-- H Adsorption: Takes H atoms as adsorption centers; identifies the closest surface atoms for descriptor calculation.
+Descriptor extraction scripts for H and OH adsorption structures on alloy
+surfaces. The code reads VASP/POSCAR files, identifies local adsorption-site
+atoms, and exports electronic/geometric descriptors for downstream machine
+learning or statistical analysis.
 
-1.2 Key Descriptors Calculated
-1. Electronic Descriptors: Valence electron count, electronegativity, ionization energy, d/p/s electron counts, cohesive energy, atomization enthalpy, etc.
-2. Structural Descriptors: Coordination number (CN), bond length, surface roughness, local density, lattice strain, Voronoi volume.
-3. Mixing & Size Descriptors: Mixing entropy (ME_1), size mismatch (SM_1) of neighbor atoms (ME_0/SM_0 are excluded).
+## What This Repository Does
 
-1.3 Adsorption Site Identification
-Automatically classifies adsorption sites for OH systems based on atomic coordinates:
-- Bridge site: Deviation from the midpoint of two candidate atoms < 0.7 Å.
-- Hollow site: Deviation from the centroid of three candidate atoms < 0.9 Å.
-- Top site: Default if bridge/hollow site conditions are not met.
+- Supports H adsorption and OH adsorption workflows.
+- Reads `.vasp`, `.VASP`, `.POSCAR`, and `POSCAR` files with ASE.
+- Uses an element feature table indexed by `AtomicNumber`.
+- Computes local descriptors for center atoms, neighbor atoms, and their local
+  environment.
+- Writes descriptor tables to Excel.
+- Records failed structures in a CSV file instead of silently skipping them.
 
-2. Environment Requirements
----------------------------
-Install dependencies via pip:
-pip install numpy pandas scipy ase psutil openpyxl
+## Repository Files
 
-Dependency Explanation:
-- numpy/pandas: Data processing and calculation.
-- scipy: Geometric mean, KDTree, Voronoi/ConvexHull calculations.
-- ase: Atomic structure reading, neighbor list construction (VASP/POSCAR support).
-- psutil: Memory usage monitoring to avoid overflow.
-- openpyxl: Excel result file writing.
+```text
+Feature_alloys/
+|-- feature_alloys.py          # Shared descriptor extraction implementation
+|-- H_features_extracted.py    # H adsorption command-line entry point
+|-- OH_features_extracted.py   # OH adsorption command-line entry point
+|-- H_features_extracted       # Compatibility wrapper for old command style
+|-- OH_features_extracted      # Compatibility wrapper for old command style
+|-- requirements.txt           # Python dependencies
+|-- requirements               # Compatibility copy of requirements.txt
+`-- README.md
+```
 
-3. File Structure
------------------
-project_root/
-├── element futures.xlsx  # Element feature data (electronegativity, radius, etc.)
-├── H_dataset.vasp/       # Folder containing H adsorption VASP/POSCAR files
-├── OH_dataset.vasp/      # Folder containing OH adsorption VASP/POSCAR files
-├── H_calculation.py      # H adsorption descriptor calculation code
-├── OH_calculation.py     # OH adsorption descriptor calculation code
-├── README.txt            # Project documentation
-├── requirements.txt      # Dependencies configuration file
-├── H_dataset.xlsx        # Output result file (auto-generated)
-└── OH_dataset.xlsx       # Output result file (auto-generated)
+## Installation
 
-4. Usage Guide
---------------
-4.1 Prepare Input Files
-1. Place VASP/POSCAR files of adsorption systems into the corresponding folder (H_dataset.vasp or OH_dataset.vasp).
-2. Prepare element futures.xlsx with the following columns (case-insensitive matching supported):
-   - AtomicNumber (index column, mandatory)
-   - Valence electron count, electronegativity, cohesive energy
-   - d/p/s electron counts, first ionization energy
-   - Covalent radius, electron affinity, atomization enthalpy
-   Missing columns will be filled with NaN automatically.
+Create an environment with Python 3.9+ and install dependencies:
 
-4.2 Run the Code
-Execute the script corresponding to the adsorption system:
-# For H adsorption systems
-python H_calculation.py
+```bash
+pip install -r requirements.txt
+```
 
-# For OH adsorption systems
-python OH_calculation.py
+Dependencies:
 
-5. Output Explanation
----------------------
-Results are saved as H_dataset.xlsx or OH_dataset.xlsx with the following key columns:
+- `numpy`, `pandas`: numerical and tabular data processing
+- `scipy`: geometric mean, KDTree, Voronoi and ConvexHull calculations
+- `ase`: VASP/POSCAR structure reading and neighbor lists
+- `psutil`: memory monitoring
+- `openpyxl`: Excel input/output support
 
-Column Name       | Description
-------------------|-------------------------------------------
-Structure         | Name of the input VASP/POSCAR file
-Z_0               | Atomic number of the main center atom
-ME_1 / SM_1       | Mixing entropy / size mismatch of neighbor atoms
-dE0/dE1/dE        | d-electron count of center/neighbor/local atoms
-En0/En1/En        | Electronegativity of center/neighbor/local atoms
-CN / BondL        | Coordination number / average bond length
-Surf_R / V_Val    | Surface roughness / average Voronoi volume
+## Required Input Files
 
-6. Notes
---------
-- Memory Control: The code monitors memory usage (default threshold: 8 GB) and skips files when overflow is detected; adjust memory_threshold in the main function if needed.
-- Neighbor Search: OH system uses 4.0 Å radius first, expands to 5.0 Å if no neighbors are found; H system uses 3.0 Å (adjustable in neighborlist.NeighborList).
-- Error Handling: Skips corrupted files and prints detailed error logs via traceback for debugging.
-- Surface Atoms: Identified by Z-coordinate threshold (75% of the Z-range); modify z_threshold_ratio in find_surface_atoms to adjust.
+### Structure Directory
 
-7. Troubleshooting
-------------------
-- "No VASP files found": Ensure the input folder path is correct and files end with .vasp or .POSCAR.
-- Empty result file: Check if input structures have valid adsorption atoms (H/O) or if all files failed due to memory issues.
-- NaN values in results: Missing element features in element futures.xlsx; supplement the corresponding columns.
+Place your VASP/POSCAR structures in a directory, for example:
+
+```text
+H_dataset.vasp/
+|-- structure_001.vasp
+|-- structure_002.vasp
+`-- ...
+```
+
+or:
+
+```text
+OH_dataset.vasp/
+|-- structure_001.vasp
+|-- structure_002.vasp
+`-- ...
+```
+
+### Element Feature Table
+
+The default feature table name is:
+
+```text
+element futures.xlsx
+```
+
+The spelling is kept for backward compatibility with the original project. You
+can use any file name by passing `--feature-table`.
+
+The Excel file must contain:
+
+- `AtomicNumber`
+
+Recommended columns:
+
+- `valence_electron_count`
+- `electronegativity`
+- `cohesive_energy`
+- `d_electron_count`
+- `p_electron_count`
+- `s_electron_count`
+- `first_ionization_energy`
+- `covalent_radius`
+- `electron_affinity_ev`
+- `period_number`
+- `atomization_enthalpy`
+
+Some common variants are normalized automatically, such as columns containing
+both `electron` and `affinity`, or both `covalent` and `radius`. Missing feature
+columns are filled with `NaN`.
+
+## Usage
+
+### H Adsorption
+
+```bash
+python H_features_extracted.py \
+  --input-dir ./H_dataset.vasp \
+  --feature-table "./element futures.xlsx" \
+  --output ./H_dataset.xlsx \
+  --failed-log ./H_failed_files.csv
+```
+
+The historical extensionless command still works:
+
+```bash
+python H_features_extracted
+```
+
+### OH Adsorption
+
+```bash
+python OH_features_extracted.py \
+  --input-dir ./OH_dataset.vasp \
+  --feature-table "./element futures.xlsx" \
+  --output ./OH_dataset.xlsx \
+  --failed-log ./OH_failed_files.csv
+```
+
+The historical extensionless command still works:
+
+```bash
+python OH_features_extracted
+```
+
+### Recursive Search
+
+Use `--recursive` when structures are stored in nested subdirectories:
+
+```bash
+python H_features_extracted.py --recursive --input-dir ./H_dataset.vasp
+```
+
+### Shared Entry Point
+
+You can also call the shared implementation directly:
+
+```bash
+python feature_alloys.py --mode h
+python feature_alloys.py --mode oh
+```
+
+## Output Columns
+
+The output Excel file contains one row per successfully processed structure.
+
+| Column | Meaning |
+| --- | --- |
+| `Structure` | Input structure file path |
+| `Z_0` | Main atomic number among adsorption-site center atoms |
+| `ME_1` | Mixing entropy of neighbor atoms |
+| `SM_1` | Size mismatch of neighbor atoms |
+| `dE0`, `pE0`, `sE0` | d/p/s electron descriptors for center atoms |
+| `dE1`, `pE1`, `sE1` | d/p/s electron descriptors for neighbor atoms |
+| `dE`, `pE`, `sE` | d/p/s electron descriptors for local center+neighbor atoms |
+| `ValE0`, `ValE1`, `ValE` | Valence electron descriptors |
+| `En0`, `En1`, `En` | Electronegativity descriptors |
+| `IonE0`, `IonE1`, `IonE` | First ionization energy descriptors |
+| `Rad0`, `Rad1`, `Rad` | Covalent radius descriptors |
+| `CN` | Generalized coordination descriptor |
+| `BondL` | Adsorbate-to-center bond-length descriptor |
+| `Surf_R` | Surface roughness from z-coordinate standard deviation |
+| `LD_0`, `LD_1` | Local density around center and neighbor atoms |
+| `CellAR` | Cell aspect ratio |
+| `CellAD` | Mean deviation of cell angles from 90 degrees |
+| `V_Val` | Mean finite Voronoi volume estimate |
+| `AtomEn0`, `AtomEn1`, `AtomEn` | Atomization enthalpy descriptors |
+
+## Adsorption-Site Logic
+
+### H Mode
+
+- H atoms are treated as adsorbates.
+- H atoms are removed before constructing surface neighbor lists.
+- If multiple H atoms are present, the H atom with the lowest z-coordinate is
+  selected.
+
+### OH Mode
+
+- O atoms are preferred as adsorption atoms.
+- If no O atom is found, H is used as a fallback.
+- O and H atoms are removed before constructing surface neighbor lists.
+
+For both modes, surface atoms are first identified from the upper portion of the
+slab along z. The code then tests whether the adsorbate is closer to a bridge,
+hollow, or top-like local geometry using midpoint/centroid deviations.
+
+## Failure Handling
+
+Files that cannot be processed are written to the failed-log CSV:
+
+```text
+Structure,Error
+path/to/bad_structure.vasp,Could not identify nearest neighbors around center atoms.
+```
+
+This makes batch processing easier to debug than silently skipping failed
+structures.
+
+## Notes and Limitations
+
+- The Voronoi descriptor uses a non-periodic Voronoi estimate. Infinite regions
+  are counted as zero.
+- The default element feature table name remains `element futures.xlsx` for
+  compatibility. If you rename it to `element features.xlsx`, pass the new path
+  with `--feature-table`.
+- Descriptor quality depends on consistent structure orientation and sensible
+  adsorbate placement.

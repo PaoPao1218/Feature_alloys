@@ -1,4 +1,4 @@
-"""Compatibility wrapper for the historical extensionless OH entry point."""
+"""Command-line entry point for OH adsorption descriptors."""
 
 from feature_alloys import run
 
