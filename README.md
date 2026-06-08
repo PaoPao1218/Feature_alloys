@@ -22,10 +22,7 @@ Feature_alloys/
 |-- feature_alloys.py          # Shared descriptor extraction implementation
 |-- H_features_extracted.py    # H adsorption command-line entry point
 |-- OH_features_extracted.py   # OH adsorption command-line entry point
-|-- H_features_extracted       # Compatibility wrapper for old command style
-|-- OH_features_extracted      # Compatibility wrapper for old command style
 |-- requirements.txt           # Python dependencies
-|-- requirements               # Compatibility copy of requirements.txt
 `-- README.md
 ```
 
@@ -112,12 +109,6 @@ python H_features_extracted.py \
   --failed-log ./H_failed_files.csv
 ```
 
-The historical extensionless command still works:
-
-```bash
-python H_features_extracted
-```
-
 ### OH Adsorption
 
 ```bash
@@ -126,12 +117,6 @@ python OH_features_extracted.py \
   --feature-table "./element futures.xlsx" \
   --output ./OH_dataset.xlsx \
   --failed-log ./OH_failed_files.csv
-```
-
-The historical extensionless command still works:
-
-```bash
-python OH_features_extracted
 ```
 
 ### Recursive Search

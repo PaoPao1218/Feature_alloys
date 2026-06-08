@@ -1,7 +1,0 @@
-"""Compatibility wrapper for the historical extensionless OH entry point."""
-
-from feature_alloys import run
-
-
-if __name__ == "__main__":
-    raise SystemExit(run(default_mode="oh"))
