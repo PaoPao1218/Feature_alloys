@@ -679,16 +679,11 @@ def descriptor_row(
         else 0.0
     )
 
-    distance_all = sorted(
+    center_distances = [
         structure.get_distance(adsorbate_idx, idx, mic=True)
-        for idx in range(len(structure))
-        if idx != adsorbate_idx
-    )
-    bond_length = (
-        np.round(safe_gmean(distance_all[: len(center_original_indices)]), 6)
-        if distance_all
-        else np.nan
-    )
+        for idx in center_original_indices
+    ]
+    bond_length = np.round(safe_gmean(center_distances), 6) if center_distances else np.nan
     strain_features = calculate_lattice_strain(np.asarray(structure.get_cell()))
 
     return {
