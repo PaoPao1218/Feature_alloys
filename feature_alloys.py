@@ -12,6 +12,17 @@ Two presets are built in:
 
 The command line entry points are intentionally thin wrappers around this file
 so H and OH calculations share one implementation.
+
+Reference
+---------
+Feature-extraction method adapted from:
+
+    Wang, C., Wang, B., Wang, C., Li, A., Chang, Z., & Wang, R.
+    "A machine learning model with minimized feature parameters for multi-type
+    hydrogen evolution catalyst prediction."
+    npj Computational Materials, 11, 111 (2025).
+    https://doi.org/10.1038/s41524-025-01607-4
+    Original code: https://github.com/wangchaobjut/Multi_Type_HERs
 """
 
 from __future__ import annotations

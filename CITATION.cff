@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the paper it is based on."
+type: software
+title: "Feature_alloys"
+abstract: "Descriptor extraction scripts for H and OH adsorption structures on alloy surfaces, adapted from the ML feature-extraction method of Wang et al. (2025)."
+authors:
+  - name: "PaoPao1218" # GitHub handle; replace with your real name if preferred
+preferred-citation:
+  type: article
+  title: "A machine learning model with minimized feature parameters for multi-type hydrogen evolution catalyst prediction"
+  authors:
+    - family-names: "Wang"
+      given-names: "Chao"
+    - family-names: "Wang"
+      given-names: "Bing"
+    - family-names: "Wang"
+      given-names: "Changhao"
+    - family-names: "Li"
+      given-names: "Aojian"
+    - family-names: "Chang"
+      given-names: "Zhipeng"
+    - family-names: "Wang"
+      given-names: "Ruzhi"
+  journal: "npj Computational Materials"
+  volume: 11
+  year: 2025
+  doi: "10.1038/s41524-025-01607-4"
+  url: "https://doi.org/10.1038/s41524-025-01607-4"

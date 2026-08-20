@@ -5,6 +5,30 @@ surfaces. The code reads VASP/POSCAR files, identifies local adsorption-site
 atoms, and exports electronic/geometric descriptors for downstream machine
 learning or statistical analysis.
 
+## Citation / Acknowledgment
+
+The feature-extraction method implemented here is adapted from the following
+paper. If you use this code, please cite it:
+
+> Wang, C., Wang, B., Wang, C., Li, A., Chang, Z., & Wang, R. (2025).
+> *A machine learning model with minimized feature parameters for multi-type
+> hydrogen evolution catalyst prediction.* **npj Computational Materials**, 11, 111.
+> https://doi.org/10.1038/s41524-025-01607-4
+
+Original code repository: <https://github.com/wangchaobjut/Multi_Type_HERs>
+
+```bibtex
+@article{Wang2025MinimizedHER,
+  author  = {Wang, Chao and Wang, Bing and Wang, Changhao and Li, Aojian and Chang, Zhipeng and Wang, Ruzhi},
+  title   = {A machine learning model with minimized feature parameters for multi-type hydrogen evolution catalyst prediction},
+  journal = {npj Computational Materials},
+  volume  = {11},
+  pages   = {111},
+  year    = {2025},
+  doi     = {10.1038/s41524-025-01607-4}
+}
+```
+
 ## What This Repository Does
 
 - Supports H adsorption and OH adsorption workflows.
@@ -23,6 +47,7 @@ Feature_alloys/
 |-- H_features_extracted.py    # H adsorption command-line entry point
 |-- OH_features_extracted.py   # OH adsorption command-line entry point
 |-- requirements.txt           # Python dependencies
+|-- CITATION.cff               # Citation metadata (GitHub "Cite this repository")
 `-- README.md
 ```
 
@@ -72,8 +97,9 @@ The default feature table name is:
 element futures.xlsx
 ```
 
-The spelling is kept for backward compatibility with the original project. You
-can use any file name by passing `--feature-table`.
+The spelling is kept for backward compatibility with the source project
+(Wang et al., npj Computational Materials, 2025 — see *Citation / Acknowledgment*).
+You can use any file name by passing `--feature-table`.
 
 The Excel file must contain:
 
